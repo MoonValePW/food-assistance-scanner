@@ -56,21 +56,48 @@
   header strong { font-size: 15px; font-weight: 650; }
   header span { margin-left: auto; font-size: 13px; color: var(--muted); }
   main { flex: 1; display: flex; flex-direction: column; padding: 16px; gap: 12px; }
-  /* A generous minimum height: the preview is the whole point of this page, and
-     a short letterboxed band reads as "broken" even when the camera is fine. */
+  /*
+    The preview is a fixed-shape box that the video is forced to fill.
+
+    Sizing was previously left to the scanner library, via its aspectRatio
+    option. That is fragile: with the option set the preview letterboxed into a
+    black band, and with it removed the container collapsed to nothing and the
+    camera was running with no visible picture at all. Both look identical to a
+    broken scanner.
+
+    So the box owns its own dimensions here, and the video is absolutely
+    positioned to cover it. Whatever inline styles the library applies, there is
+    always a preview of a known size.
+  */
   #reader {
-    width: 100%; max-width: 460px; margin: 0 auto;
-    border-radius: 14px; overflow: hidden; background: #000;
-    min-height: 300px;
+    position: relative;
+    width: 100%;
+    max-width: 460px;
+    margin: 0 auto;
+    aspect-ratio: 3 / 4;
+    min-height: 320px;
+    border-radius: 14px;
+    overflow: hidden;
+    background: #000;
+  }
+  /* The library nests the video inside its own wrapper divs. */
+  #reader > div,
+  #reader__scan_region {
+    position: absolute !important;
+    inset: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
   }
   #reader video {
+    position: absolute !important;
+    inset: 0 !important;
     width: 100% !important;
-    height: auto !important;
-    display: block;
-    object-fit: cover;
+    height: 100% !important;
+    object-fit: cover !important;
+    display: block !important;
   }
   #reader img[alt="Info icon"] { display: none; }
-  /* The library's own "select camera" scaffolding is redundant here. */
+  /* The library's own status text and camera scaffolding duplicate ours. */
   #reader__dashboard_section_csr span,
   #reader__status_span { display: none !important; }
   .status {
@@ -275,6 +302,7 @@
           el('badge').textContent = 'Camera on';
           setUpTorch();
           showCameras(devices, id);
+          checkPreviewVisible();
         });
     }).catch(function (err) {
       running = false;
@@ -287,6 +315,31 @@
       el('hint').textContent =
         'If this keeps failing, open the app itself and use "Use phone camera instead", which takes a single photo.';
     });
+  }
+
+  /**
+   * Confirms a picture is actually on screen.
+   *
+   * "Camera on" only means the stream started. It says nothing about whether
+   * anything is visible — twice now the camera has been running happily behind
+   * a collapsed or letterboxed container, which to a volunteer is simply a
+   * broken scanner. If there is no visible video after a moment, say so and
+   * offer the path that does not need one.
+   */
+  function checkPreviewVisible() {
+    setTimeout(function () {
+      if (!running) return;
+      var v = document.querySelector('#reader video');
+      var w = v ? v.getBoundingClientRect().width : 0;
+      var h = v ? v.getBoundingClientRect().height : 0;
+
+      if (!v || w < 40 || h < 40) {
+        say('The camera is running but the picture is not showing on this phone.', 'err');
+        el('hint').innerHTML =
+          'Try another camera above. If none show a picture, open the app and use ' +
+          '<strong>"Use phone camera instead"</strong>, which takes a single photo and always works.';
+      }
+    }, 1800);
   }
 
   function stop() {
