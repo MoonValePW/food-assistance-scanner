@@ -140,6 +140,7 @@
   <p class="status" id="status">Starting camera…</p>
 
   <button class="btn btn--primary hidden" id="start">Start camera</button>
+  <button class="btn" id="switch">Switch camera</button>
   <button class="btn hidden" id="torch">Light on</button>
   <select id="cameras" class="hidden"></select>
 
@@ -362,17 +363,22 @@
   }
 
   /**
-   * Confirms a picture is actually on screen.
+   * Checks that a picture is on screen AND that it is the rear camera.
    *
-   * "Camera on" only means the stream started. It says nothing about whether
-   * anything is visible — twice now the camera has been running happily behind
-   * a collapsed or letterboxed container, which to a volunteer is simply a
-   * broken scanner. If there is no visible video after a moment, say so and
-   * offer the path that does not need one.
+   * Asking for a camera is not the same as getting one. Some browsers — iOS
+   * in-app browsers especially, the kind that open when a link is tapped inside
+   * another app — ignore deviceId and facingMode entirely and hand back the
+   * front camera regardless. The picker then reads "Back Camera" while the
+   * volunteer is looking at their own face, which is impossible to diagnose
+   * from the outside.
+   *
+   * getRunningTrackSettings() reports what the browser actually gave us, so the
+   * page can say plainly that the request was overruled, and by whom.
    */
   function checkPreviewVisible() {
     setTimeout(function () {
       if (!running) return;
+
       var v = document.querySelector('#reader video');
       var w = v ? v.getBoundingClientRect().width : 0;
       var h = v ? v.getBoundingClientRect().height : 0;
@@ -382,8 +388,58 @@
         el('hint').innerHTML =
           'Try another camera above. If none show a picture, open the app and use ' +
           '<strong>"Use phone camera instead"</strong>, which takes a single photo and always works.';
+        return;
       }
+
+      var facing = null, label = '';
+      try {
+        var s = scanner.getRunningTrackSettings() || {};
+        facing = s.facingMode || null;
+        label = String(s.label || '');
+      } catch (e) { /* not all browsers report it */ }
+
+      var isFront = facing === 'user' || /front/i.test(label);
+      if (!isFront) { el('hint').textContent = ''; return; }
+
+      say('This is the FRONT camera — your browser overruled the choice.', 'err');
+      el('hint').innerHTML =
+        '<strong>Open this page in Safari itself</strong>, not from a link inside another app. ' +
+        'In-app browsers ignore the camera request and always hand back the selfie camera. ' +
+        'Tap the ••• or share button and choose “Open in Safari”, then bookmark it.';
+      el('switch').className = 'btn btn--primary';
     }, 1800);
+  }
+
+  /**
+   * Forces the next camera in the list.
+   *
+   * When constraints are being ignored, cycling devices explicitly is the only
+   * lever left — and it costs one tap, which beats explaining any of this to a
+   * volunteer at six in the evening.
+   */
+  function switchCamera() {
+    Html5Qrcode.getCameras().then(function (devices) {
+      if (!devices || devices.length < 2) {
+        say('This phone only offers one camera to the browser.', 'err');
+        return;
+      }
+      var current = null;
+      try { current = localStorage.getItem('fad.camera'); } catch (e) {}
+
+      var i = 0;
+      for (var n = 0; n < devices.length; n++) if (devices[n].id === current) i = n;
+      var next = devices[(i + 1) % devices.length];
+
+      try { localStorage.setItem('fad.camera', next.id); } catch (e) {}
+      say('Switching to ' + (next.label || 'the next camera') + '…');
+
+      if (running) {
+        running = false;
+        scanner.stop().then(function () { start(next.id); }).catch(function () { start(next.id); });
+      } else {
+        start(next.id);
+      }
+    });
   }
 
   function stop() {
@@ -439,6 +495,7 @@
   }
 
   el('start').onclick = function () { start(); };
+  el('switch').onclick = switchCamera;
 
   // Release the camera when the tab is hidden; some phones will not hand it
   // back to another app otherwise.
