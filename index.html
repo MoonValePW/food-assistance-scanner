@@ -225,21 +225,46 @@
     window.location.href = CHECKIN_URL + '?t=' + encodeURIComponent(token);
   }
 
-  function config() {
+  /**
+   * Scanner configuration.
+   *
+   * THE CAMERA CHOICE MUST LIVE INSIDE videoConstraints. From the library's own
+   * start():
+   *
+   *     var a = c ? s.videoConstraints : h.createVideoConstraints(t);
+   *
+   * where `c` is "config.videoConstraints was supplied and is valid" and `t` is
+   * the camera passed as the first argument. So when videoConstraints is
+   * present, THE CAMERA ARGUMENT IS IGNORED COMPLETELY.
+   *
+   * This previously supplied videoConstraints carrying resolution and focus but
+   * no camera selection, which silently discarded the chosen rear camera and
+   * let iOS fall back to its default — the front one. The picker showed "Back
+   * Camera" because that was the intent; the library never received it.
+   *
+   * Everything therefore goes in one object.
+   */
+  function config(cameraSelector) {
+    var constraints = {
+      width: { ideal: 1920 },
+      height: { ideal: 1080 },
+      advanced: [{ focusMode: 'continuous' }]
+    };
+
+    for (var k in cameraSelector) {
+      if (cameraSelector.hasOwnProperty(k)) constraints[k] = cameraSelector[k];
+    }
+
     return {
       fps: 15,
       qrbox: function (w, h) {
         var edge = Math.floor(Math.min(w, h) * 0.85);
         return { width: edge, height: edge };
       },
-      // No forced aspectRatio: pinning it to 1.0 fights the phone's native
-      // portrait video and can letterbox the preview into a black band.
+      // No forced aspectRatio: the preview box is sized in CSS instead, so the
+      // library cannot letterboard or collapse it.
       experimentalFeatures: { useBarCodeDetectorIfSupported: true },
-      videoConstraints: {
-        width: { ideal: 1920 },
-        height: { ideal: 1080 },
-        advanced: [{ focusMode: 'continuous' }]
-      }
+      videoConstraints: constraints
     };
   }
 
@@ -293,17 +318,36 @@
       var id = deviceId || pickRearCamera(devices);
       if (!id) throw { name: 'NotFoundError' };
 
-      return scanner.start({ deviceId: { exact: id } }, config(), onScan, function () {})
-        .then(function () {
-          running = true;
-          try { localStorage.setItem('fad.camera', id); } catch (e) {}
-          el('start').className = 'btn btn--primary hidden';
-          say('Point the camera at the family’s card.');
-          el('badge').textContent = 'Camera on';
-          setUpTorch();
-          showCameras(devices, id);
-          checkPreviewVisible();
-        });
+      /**
+       * Tries the chosen camera, then falls back.
+       *
+       * deviceId is the precise choice and is tried first. If the browser
+       * refuses it — iOS device ids can go stale between enumerations —
+       * facingMode "exact" still forces a rear camera, and only then do we
+       * accept whatever the browser wants to give us.
+       */
+      function attempt(selectors, i) {
+        return scanner.start(selectors[i].camera, config(selectors[i].camera), onScan, function () {})
+          .catch(function (e) {
+            if (i + 1 >= selectors.length) throw e;
+            return attempt(selectors, i + 1);
+          });
+      }
+
+      return attempt([
+        { camera: { deviceId: { exact: id } } },
+        { camera: { facingMode: { exact: 'environment' } } },
+        { camera: { facingMode: 'environment' } }
+      ], 0).then(function () {
+        running = true;
+        try { localStorage.setItem('fad.camera', id); } catch (e) {}
+        el('start').className = 'btn btn--primary hidden';
+        say('Point the camera at the family’s card.');
+        el('badge').textContent = 'Camera on';
+        setUpTorch();
+        showCameras(devices, id);
+        checkPreviewVisible();
+      });
     }).catch(function (err) {
       running = false;
       el('start').className = 'btn btn--primary';
