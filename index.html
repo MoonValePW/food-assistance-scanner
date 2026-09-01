@@ -56,9 +56,23 @@
   header strong { font-size: 15px; font-weight: 650; }
   header span { margin-left: auto; font-size: 13px; color: var(--muted); }
   main { flex: 1; display: flex; flex-direction: column; padding: 16px; gap: 12px; }
-  #reader { width: 100%; max-width: 460px; margin: 0 auto; border-radius: 14px; overflow: hidden; background: #000; }
-  #reader video { width: 100% !important; display: block; }
+  /* A generous minimum height: the preview is the whole point of this page, and
+     a short letterboxed band reads as "broken" even when the camera is fine. */
+  #reader {
+    width: 100%; max-width: 460px; margin: 0 auto;
+    border-radius: 14px; overflow: hidden; background: #000;
+    min-height: 300px;
+  }
+  #reader video {
+    width: 100% !important;
+    height: auto !important;
+    display: block;
+    object-fit: cover;
+  }
   #reader img[alt="Info icon"] { display: none; }
+  /* The library's own "select camera" scaffolding is redundant here. */
+  #reader__dashboard_section_csr span,
+  #reader__status_span { display: none !important; }
   .status {
     text-align: center; font-size: 15px; color: var(--muted);
     min-height: 24px; padding: 0 8px;
@@ -188,13 +202,13 @@
     return {
       fps: 15,
       qrbox: function (w, h) {
-        var edge = Math.floor(Math.min(w, h) * 0.9);
+        var edge = Math.floor(Math.min(w, h) * 0.85);
         return { width: edge, height: edge };
       },
-      aspectRatio: 1.0,
+      // No forced aspectRatio: pinning it to 1.0 fights the phone's native
+      // portrait video and can letterbox the preview into a black band.
       experimentalFeatures: { useBarCodeDetectorIfSupported: true },
       videoConstraints: {
-        facingMode: 'environment',
         width: { ideal: 1920 },
         height: { ideal: 1080 },
         advanced: [{ focusMode: 'continuous' }]
@@ -202,32 +216,77 @@
     };
   }
 
+  /**
+   * Chooses the rear camera by DEVICE, not by facingMode.
+   *
+   * facingMode: 'environment' is a request the browser may ignore — on iOS it
+   * frequently hands back the front camera, which points at the ceiling and
+   * shows a black preview that looks exactly like a broken scanner.
+   *
+   * iOS labels its cameras "Front Camera", "Back Camera", "Back Dual Wide
+   * Camera", "Back Ultra Wide Camera". Plain "Back Camera" is preferred: the
+   * ultra-wide cannot focus on something held close, which is the other way
+   * this looks broken.
+   */
+  function pickRearCamera(devices) {
+    if (!devices || !devices.length) return null;
+
+    var saved = null;
+    try { saved = localStorage.getItem('fad.camera'); } catch (e) {}
+    if (saved) {
+      for (var s = 0; s < devices.length; s++) if (devices[s].id === saved) return saved;
+    }
+
+    var backs = devices.filter(function (d) { return /back|rear|environment/i.test(d.label || ''); });
+    if (backs.length) {
+      for (var i = 0; i < backs.length; i++) {
+        var label = backs[i].label || '';
+        if (/back camera/i.test(label) && !/ultra|wide|tele/i.test(label)) return backs[i].id;
+      }
+      for (var j = 0; j < backs.length; j++) {
+        if (!/ultra/i.test(backs[j].label || '')) return backs[j].id;
+      }
+      return backs[0].id;
+    }
+
+    // No labels (permission not yet granted, or a browser that hides them).
+    // The rear camera is conventionally last.
+    return devices[devices.length - 1].id;
+  }
+
   function start(deviceId) {
     if (running) return;
     if (!scanner) scanner = new Html5Qrcode('reader', { verbose: false });
 
-    var source = deviceId ? { deviceId: { exact: deviceId } } : config().videoConstraints;
+    say('Starting camera…');
 
-    scanner.start(source, config(), onScan, function () {})
-      .then(function () {
-        running = true;
-        el('start').className = 'btn btn--primary hidden';
-        say('Point the camera at the family’s card.');
-        el('badge').textContent = 'Camera on';
-        setUpTorch();
-        listCameras();
-      })
-      .catch(function (err) {
-        running = false;
-        el('start').className = 'btn btn--primary';
-        el('start').textContent = 'Allow camera';
-        el('badge').textContent = '';
-        say(err && err.name === 'NotAllowedError'
-          ? 'Camera permission was refused. Tap "Allow camera", and check Settings → Safari → Camera.'
-          : 'Could not start the camera on this device.', 'err');
-        el('hint').textContent =
-          'If this keeps failing, open the app itself and use "Use phone camera instead", which takes a single photo.';
-      });
+    // getCameras() prompts for permission and, once granted, returns labels —
+    // which is what makes choosing the rear camera possible at all.
+    Html5Qrcode.getCameras().then(function (devices) {
+      var id = deviceId || pickRearCamera(devices);
+      if (!id) throw { name: 'NotFoundError' };
+
+      return scanner.start({ deviceId: { exact: id } }, config(), onScan, function () {})
+        .then(function () {
+          running = true;
+          try { localStorage.setItem('fad.camera', id); } catch (e) {}
+          el('start').className = 'btn btn--primary hidden';
+          say('Point the camera at the family’s card.');
+          el('badge').textContent = 'Camera on';
+          setUpTorch();
+          showCameras(devices, id);
+        });
+    }).catch(function (err) {
+      running = false;
+      el('start').className = 'btn btn--primary';
+      el('start').textContent = 'Allow camera';
+      el('badge').textContent = '';
+      say(err && err.name === 'NotAllowedError'
+        ? 'Camera permission was refused. Tap "Allow camera", and check Settings → Safari → Camera.'
+        : 'Could not start the camera on this device.', 'err');
+      el('hint').textContent =
+        'If this keeps failing, open the app itself and use "Use phone camera instead", which takes a single photo.';
+    });
   }
 
   function stop() {
@@ -253,24 +312,33 @@
   }
 
   /**
-   * Multi-lens phones often expose an ultra-wide as the default "environment"
-   * camera, and ultra-wides cannot focus on something held close — which looks
-   * exactly like a broken scanner.
+   * Shows the camera picker, with the one actually running selected.
+   *
+   * The selection must reflect reality: a dropdown reading "Front Camera" while
+   * the rear camera is running is worse than no dropdown at all, and that is
+   * exactly what the previous version displayed.
    */
-  function listCameras() {
+  function showCameras(devices, activeId) {
     var sel = el('cameras');
-    Html5Qrcode.getCameras().then(function (devices) {
-      if (!devices || devices.length < 2) { sel.className = 'hidden'; return; }
-      sel.className = '';
-      sel.innerHTML = devices.map(function (d, i) {
-        return '<option value="' + d.id + '">' + (d.label || ('Camera ' + (i + 1))) + '</option>';
-      }).join('');
-      sel.onchange = function () {
-        var id = this.value;
-        if (running) { running = false; scanner.stop().then(function () { start(id); }).catch(function () { start(id); }); }
-        else start(id);
-      };
-    }).catch(function () { sel.className = 'hidden'; });
+    if (!devices || devices.length < 2) { sel.className = 'hidden'; return; }
+
+    sel.className = '';
+    sel.innerHTML = devices.map(function (d, i) {
+      return '<option value="' + d.id + '"' + (d.id === activeId ? ' selected' : '') + '>' +
+             (d.label || ('Camera ' + (i + 1))) + '</option>';
+    }).join('');
+    sel.value = activeId;
+
+    sel.onchange = function () {
+      var id = this.value;
+      try { localStorage.setItem('fad.camera', id); } catch (e) {}
+      if (running) {
+        running = false;
+        scanner.stop().then(function () { start(id); }).catch(function () { start(id); });
+      } else {
+        start(id);
+      }
+    };
   }
 
   el('start').onclick = function () { start(); };
