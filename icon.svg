@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Food Assistance Scanner">
+  <rect width="512" height="512" rx="112" fill="#11141a"/>
+  <g fill="none" stroke="#5b8dfb" stroke-width="28" stroke-linecap="square">
+    <polyline points="212,124 124,124 124,212"/>
+    <polyline points="300,124 388,124 388,212"/>
+    <polyline points="388,300 388,388 300,388"/>
+    <polyline points="124,300 124,388 212,388"/>
+  </g>
+  <rect x="124" y="242" width="264" height="28" fill="#eef1f6"/>
+</svg>

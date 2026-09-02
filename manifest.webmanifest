@@ -1,0 +1,15 @@
+{
+  "name": "Food Assistance Scanner",
+  "short_name": "Scan",
+  "description": "Scans family cards for the Food Assistance Dashboard.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#11141a",
+  "theme_color": "#11141a",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icon.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

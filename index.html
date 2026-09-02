@@ -3,9 +3,21 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="color-scheme" content="light dark">
 <meta name="robots" content="noindex, nofollow">
 <title>Scan — Food Assistance</title>
+
+<!-- Installs to the home screen as a standalone app: no address bar, no
+     browser toolbar, and roughly 15% more screen for the viewfinder. This is
+     also the closest the platform allows the scanner to get to being "inside"
+     the dashboard — see WHY THIS PAGE EXISTS below. -->
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Scan">
+<meta name="theme-color" content="#11141a">
+<link rel="apple-touch-icon" href="icon.png">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+
 <!--
   Standalone QR scanner for the Food Assistance Dashboard.
 
@@ -14,48 +26,121 @@
   Google Apps Script renders a web app's HTML inside a cross-origin iframe that
   Google controls. That iframe is not granted camera permission, so
   getUserMedia() fails with NotAllowedError on iOS Safari no matter what the
-  user allows — confirmed by the app's own camera check. No code inside an Apps
-  Script project can change that; the permission is set by the parent frame.
+  user allows - confirmed by the app's own camera check.
 
-  This page is served from ordinary static hosting, so it is the top-level
-  document and grants its own camera permission. It scans continuously, then
-  hands the token to the Apps Script app, which does the actual check-in.
+  This cannot be worked around by embedding this page inside the app either.
+  Permissions Policy is inherited: an iframe's allow="camera" can only DELEGATE
+  a permission the embedding document already holds, and the Apps Script frame
+  holds none. A nested frame would fail exactly as the app itself does.
+
+  So the scanner is served from ordinary static hosting, where it is the
+  top-level document and grants its own camera permission. It scans
+  continuously, then hands the token to the Apps Script app, which does the
+  actual check-in. Installed to the home screen it opens chrome-less, which is
+  what makes the two halves read as one app.
 
   SECURITY
   --------
-  This file contains no secrets and needs no sign-in. It reads a QR code and
-  navigates to the check-in URL; every check-in is still authenticated and
-  authorised by Apps Script. The scanned token never leaves the browser except
-  in that navigation to Google, so the static host never sees it.
+  This file contains no secrets, holds no family data and needs no sign-in. It
+  reads a QR code and navigates to the check-in URL; every check-in is still
+  authenticated and authorised by Apps Script. The scanned token never leaves
+  the browser except in that navigation to Google, so the static host never
+  sees it.
 
   SETUP
   -----
   Set CHECKIN_URL below to your deployed /exec URL, then host this folder
-  anywhere static (GitHub Pages, Netlify, Cloudflare Pages). Must be HTTPS —
+  anywhere static (GitHub Pages, Netlify, Cloudflare Pages). Must be HTTPS -
   browsers refuse camera access otherwise.
 -->
 <style>
+  /*
+    Deliberately dark in both colour schemes, unlike the dashboard.
+
+    This screen is a viewfinder. Every camera surface a volunteer has ever used
+    is dark, a bright chrome around a dark preview reads as a bug, and the
+    distribution runs after sunset. The palette is otherwise the dashboard's own
+    dark theme, so the handoff to the check-in screen is not a jolt.
+  */
   :root {
-    --bg: #0f1218; --surface: #191d25; --border: #2c3340;
-    --text: #eef1f6; --muted: #9aa4b4;
-    --primary: #5b8dfb; --success: #4ade80; --danger: #f87171; --warn: #fbbf24;
+    --bg: #11141a;
+    --surface: #191d25;
+    --surface-2: #21262f;
+    --border: #313846;
+    --text: #eef1f6;
+    --muted: #9aa4b4;
+    --primary: #5b8dfb;
+    --success: #4ade80;
+    --danger: #f87171;
+
+    --radius: 14px;
+    --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px;
   }
+
   * { box-sizing: border-box; }
-  html, body { height: 100%; }
+  html { -webkit-text-size-adjust: 100%; height: 100%; }
+
   body {
-    margin: 0; background: var(--bg); color: var(--text);
+    margin: 0;
+    min-height: 100%;
+    background: var(--bg);
+    color: var(--text);
     font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
-    display: flex; flex-direction: column;
-    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    display: flex;
+    flex-direction: column;
+    padding:
+      env(safe-area-inset-top) env(safe-area-inset-right)
+      env(safe-area-inset-bottom) env(safe-area-inset-left);
+    overscroll-behavior-y: none;
   }
-  header {
-    padding: 12px 16px; border-bottom: 1px solid var(--border);
-    display: flex; align-items: center; gap: 10px;
+
+  /* ---- Top bar -------------------------------------------------------- */
+
+  .topbar {
+    display: flex;
+    align-items: center;
+    gap: var(--s3);
+    padding: var(--s3) var(--s4);
+    border-bottom: 1px solid var(--border);
   }
-  header strong { font-size: 15px; font-weight: 650; }
-  header span { margin-left: auto; font-size: 13px; color: var(--muted); }
-  main { flex: 1; display: flex; flex-direction: column; padding: 16px; gap: 12px; }
+  .mark {
+    width: 26px; height: 26px; flex: none;
+    border-radius: 8px;
+    background: linear-gradient(140deg, var(--primary), #8ab0ff);
+  }
+  .titles { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
+  .titles strong { font-size: 15px; font-weight: 650; letter-spacing: -.01em; }
+  .titles small { font-size: 12px; color: var(--muted); }
+
+  /* A live indicator rather than a word: the dot is readable at arm's length,
+     which "Camera on" in 13px grey was not. */
+  .badge {
+    margin-left: auto;
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12px; color: var(--muted); white-space: nowrap;
+  }
+  .badge::before {
+    content: ""; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--border);
+  }
+  .badge.live::before { background: var(--success); box-shadow: 0 0 0 3px rgba(74, 222, 128, .18); }
+
+  /* ---- Viewfinder ----------------------------------------------------- */
+
+  main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: var(--s3);
+    padding: var(--s4);
+    max-width: 520px;
+    width: 100%;
+    margin: 0 auto;
+  }
+
+  .stage { position: relative; margin: 0 auto; width: 100%; max-width: 460px; }
+
   /*
     The preview is a fixed-shape box that the video is forced to fill.
 
@@ -63,24 +148,20 @@
     option. That is fragile: with the option set the preview letterboxed into a
     black band, and with it removed the container collapsed to nothing and the
     camera was running with no visible picture at all. Both look identical to a
-    broken scanner.
-
-    So the box owns its own dimensions here, and the video is absolutely
-    positioned to cover it. Whatever inline styles the library applies, there is
-    always a preview of a known size.
+    broken scanner. So the box owns its own dimensions here - do not hand
+    sizing back to the library.
   */
   #reader {
     position: relative;
     width: 100%;
-    max-width: 460px;
-    margin: 0 auto;
     aspect-ratio: 3 / 4;
-    min-height: 320px;
-    border-radius: 14px;
+    max-height: 58vh;
+    min-height: 300px;
+    border-radius: 18px;
     overflow: hidden;
     background: #000;
+    border: 1px solid var(--border);
   }
-  /* The library nests the video inside its own wrapper divs. */
   #reader > div,
   #reader__scan_region {
     position: absolute !important;
@@ -96,56 +177,167 @@
     object-fit: cover !important;
     display: block !important;
   }
-  #reader img[alt="Info icon"] { display: none; }
-  /* The library's own status text and camera scaffolding duplicate ours. */
+  /* The library draws its own border, status line and info icon. Ours replace
+     them, and two sets of scan furniture on one preview looks unfinished. */
+  #reader img[alt="Info icon"],
   #reader__dashboard_section_csr span,
   #reader__status_span { display: none !important; }
+  #reader__scan_region img { display: none !important; }
+
+  /* Corner marks showing where to hold the card. Purely decorative and
+     pointer-transparent so it can never swallow a tap. */
+  /* A centred SQUARE, because the decoder searches a square region (qrbox is
+     85% of the shorter edge). Stretching the marks to the box would promise a
+     scan area that does not exist, and the lower marks would sit behind the
+     status pill. */
+  .frame {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    width: 74%;
+    aspect-ratio: 1;
+    pointer-events: none;
+  }
+  .frame i {
+    position: absolute;
+    width: 30px; height: 30px;
+    border: 3px solid rgba(255, 255, 255, .92);
+  }
+  .frame i:nth-child(1) { top: 0; left: 0; border-right: 0; border-bottom: 0; border-radius: 10px 0 0 0; }
+  .frame i:nth-child(2) { top: 0; right: 0; border-left: 0; border-bottom: 0; border-radius: 0 10px 0 0; }
+  .frame i:nth-child(3) { bottom: 0; left: 0; border-right: 0; border-top: 0; border-radius: 0 0 0 10px; }
+  .frame i:nth-child(4) { bottom: 0; right: 0; border-left: 0; border-top: 0; border-radius: 0 0 10px 0; }
+
+  /* ---- Status --------------------------------------------------------- */
+
+  /*
+    Sits over the bottom of the preview so the eye never leaves the picture.
+    Neutral by default; it only takes on colour when something has actually
+    happened, so colour still means something.
+  */
   .status {
-    text-align: center; font-size: 15px; color: var(--muted);
-    min-height: 24px; padding: 0 8px;
+    position: absolute;
+    left: var(--s3); right: var(--s3); bottom: var(--s3);
+    margin: 0;
+    padding: 10px var(--s3);
+    border-radius: 12px;
+    background: rgba(12, 15, 20, .82);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 255, 255, .10);
+    color: #fff;
+    font-size: 15px;
+    font-weight: 560;
+    text-align: center;
   }
-  .status.err { color: var(--danger); }
-  .status.ok { color: var(--success); }
+  .status.ok  { background: rgba(20, 83, 45, .90);  border-color: rgba(74, 222, 128, .45); }
+  .status.err { background: rgba(93, 24, 24, .92);  border-color: rgba(248, 113, 113, .45); }
+
+  /* ---- Controls ------------------------------------------------------- */
+
+  .controls { display: flex; gap: var(--s2); }
+
   .btn {
-    display: flex; align-items: center; justify-content: center;
-    width: 100%; max-width: 460px; margin: 0 auto;
-    min-height: 52px; padding: 12px 18px;
-    border-radius: 12px; border: 1px solid var(--border);
-    background: var(--surface); color: var(--text);
-    font: inherit; font-weight: 620; cursor: pointer;
-    -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    flex: 1;
+    min-height: 52px;
+    padding: 12px 14px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
   }
+  .btn svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; flex: none; }
   .btn--primary { background: var(--primary); border-color: var(--primary); color: #0b0e13; }
   .btn:active { transform: scale(.985); }
+
   select {
-    width: 100%; max-width: 460px; margin: 0 auto;
-    min-height: 48px; padding: 12px; font-size: 16px;
-    border-radius: 12px; border: 1px solid var(--border);
-    background: var(--surface); color: var(--text);
+    width: 100%;
+    min-height: 48px;
+    padding: 12px;
+    font: inherit;
+    font-size: 16px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
   }
+
+  .hint {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--muted);
+    text-align: center;
+  }
+  .hint:empty { display: none; }
+  .hint strong { color: var(--text); }
+
+  /* The way out when a card will not scan. Understated, but never hidden
+     behind a menu - it is the fallback a volunteer needs in a hurry. */
+  .escape {
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    min-height: 48px;
+    margin-top: auto;
+    border-top: 1px solid var(--border);
+    padding-top: var(--s3);
+    color: var(--primary);
+    text-decoration: none;
+    font-size: 15px;
+    font-weight: 560;
+  }
+
   .hidden { display: none !important; }
-  .hint { text-align: center; font-size: 13px; color: var(--muted); max-width: 460px; margin: 0 auto; }
-  a { color: var(--primary); }
+
+  @media (prefers-reduced-motion: reduce) {
+    .btn:active { transform: none; }
+  }
 </style>
 </head>
 <body>
 
-<header>
-  <strong>Scan family card</strong>
-  <span id="badge"></span>
+<header class="topbar">
+  <span class="mark" aria-hidden="true"></span>
+  <span class="titles">
+    <strong>Food Assistance</strong>
+    <small>Scan family card</small>
+  </span>
+  <span class="badge" id="badge"></span>
 </header>
 
 <main>
-  <div id="reader"></div>
-  <p class="status" id="status">Starting camera…</p>
+  <div class="stage">
+    <div id="reader"></div>
+    <div class="frame" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+    <p class="status" id="status" role="status" aria-live="polite">Starting camera…</p>
+  </div>
 
-  <button class="btn btn--primary hidden" id="start">Start camera</button>
-  <button class="btn" id="switch">Switch camera</button>
-  <button class="btn hidden" id="torch">Light on</button>
-  <select id="cameras" class="hidden"></select>
+  <div class="controls">
+    <button class="btn hidden" id="torch" type="button">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"/></svg>
+      <span>Light</span>
+    </button>
+    <button class="btn" id="switch" type="button">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 3l4 4-4 4"/><path d="M21 7H8a4 4 0 0 0-4 4v1"/><path d="M7 21l-4-4 4-4"/><path d="M3 17h13a4 4 0 0 0 4-4v-1"/></svg>
+      <span>Switch camera</span>
+    </button>
+  </div>
+
+  <button class="btn btn--primary hidden" id="start" type="button">Start camera</button>
+
+  <select id="cameras" class="hidden" aria-label="Camera"></select>
 
   <p class="hint" id="hint"></p>
-  <p class="hint"><a id="manual" href="#">Open the app to search by name instead</a></p>
+
+  <a class="escape" id="manual" href="#">
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+    Search by name instead
+  </a>
 </main>
 
 <script src="html5-qrcode.min.js"></script>
@@ -164,6 +356,13 @@
   var last = { text: null, at: 0 };
 
   el('manual').href = CHECKIN_URL;
+
+  /** The live indicator in the top bar. */
+  function badge(text, live) {
+    var b = el("badge");
+    b.textContent = text || "";
+    b.className = "badge" + (live ? " live" : "");
+  }
 
   function say(msg, cls) {
     status.textContent = msg;
@@ -344,7 +543,7 @@
         try { localStorage.setItem('fad.camera', id); } catch (e) {}
         el('start').className = 'btn btn--primary hidden';
         say('Point the camera at the family’s card.');
-        el('badge').textContent = 'Camera on';
+        badge('Scanning', true);
         setUpTorch();
         showCameras(devices, id);
         checkPreviewVisible();
@@ -353,7 +552,7 @@
       running = false;
       el('start').className = 'btn btn--primary';
       el('start').textContent = 'Allow camera';
-      el('badge').textContent = '';
+      badge('Camera off', false);
       say(err && err.name === 'NotAllowedError'
         ? 'Camera permission was refused. Tap "Allow camera", and check Settings → Safari → Camera.'
         : 'Could not start the camera on this device.', 'err');
@@ -458,7 +657,7 @@
       btn.onclick = function () {
         torchOn = !torchOn;
         scanner.applyVideoConstraints({ advanced: [{ torch: torchOn }] })
-          .then(function () { btn.textContent = torchOn ? 'Light off' : 'Light on'; })
+          .then(function () { btn.querySelector("span").textContent = torchOn ? "Light off" : "Light on"; })
           .catch(function () { btn.className = 'btn hidden'; });
       };
     } catch (e) { btn.className = 'btn hidden'; }
