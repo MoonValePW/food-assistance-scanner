@@ -371,6 +371,10 @@
   var status = el('status');
   var scanner = null, running = false, busy = false, torchOn = false;
   var checks = 0, diagTimer = null;
+
+  // Bumped on every publish. Caches on phones are aggressive and a stale page
+  // is indistinguishable from a fix that did not work.
+  var BUILD = '2026-09-02d';
   var last = { text: null, at: 0 };
 
   el('manual').href = CHECKIN_URL;
@@ -499,20 +503,81 @@
    * ultra-wide cannot focus on something held close, which is the other way
    * this looks broken.
    */
+  /**
+   * True for a rear camera that cannot focus on something held at card
+   * distance: the ultra-wide, and the combined "Dual"/"Triple" modules that
+   * can switch down to it. They produce a picture that looks fine and is too
+   * soft to decode.
+   */
+  function poorAtCloseRange(label) {
+    return /ultra|dual|triple|tele/i.test(label || '');
+  }
+
+  function isRearLabel(label) {
+    return /back|rear|environment/i.test(label || '');
+  }
+
+  function anyRearCamera(devices) {
+    for (var i = 0; i < devices.length; i++) {
+      if (isRearLabel(devices[i].label)) return true;
+    }
+    return false;
+  }
+
+  /** The plain rear camera, if this phone offers one. */
+  function plainBackCamera(devices) {
+    for (var i = 0; i < devices.length; i++) {
+      var l = devices[i].label || '';
+      if (/back|rear/i.test(l) && !poorAtCloseRange(l)) return devices[i];
+    }
+    return null;
+  }
+
   function pickRearCamera(devices) {
     if (!devices || !devices.length) return null;
 
     var saved = null;
     try { saved = localStorage.getItem('fad.camera'); } catch (e) {}
+
     if (saved) {
-      for (var s = 0; s < devices.length; s++) if (devices[s].id === saved) return saved;
+      for (var s = 0; s < devices.length; s++) {
+        if (devices[s].id !== saved) continue;
+
+        // A remembered choice is honoured only while it is still a sane one.
+        //
+        // Remembering it was meant to save a tap. What it actually did was make
+        // one wrong tap permanent. "Switch camera" cycles through every lens
+        // the phone reports, including the selfie camera and the wide modules
+        // that cannot focus at card distance, and whatever it landed on was
+        // written to storage and reused forever. Both failures look identical
+        // from the outside: a live, plausible picture that never decodes. A
+        // preference that can quietly disable the scanner is not worth keeping.
+        var label = devices[s].label || '';
+
+        // Not a rear camera at all. Only honour that if this phone genuinely
+        // offers nothing else, so an escape hatch survives for a device whose
+        // labels are wrong.
+        if (!isRearLabel(label)) {
+          if (anyRearCamera(devices)) break;
+          return saved;
+        }
+
+        // A rear camera, but one that cannot focus this close.
+        if (poorAtCloseRange(label)) {
+          var better = plainBackCamera(devices);
+          if (better) {
+            try { localStorage.setItem('fad.camera', better.id); } catch (e) {}
+            return better.id;
+          }
+        }
+        return saved;
+      }
     }
 
-    var backs = devices.filter(function (d) { return /back|rear|environment/i.test(d.label || ''); });
+    var backs = devices.filter(function (d) { return isRearLabel(d.label); });
     if (backs.length) {
       for (var i = 0; i < backs.length; i++) {
-        var label = backs[i].label || '';
-        if (/back camera/i.test(label) && !/ultra|wide|tele/i.test(label)) return backs[i].id;
+        if (!poorAtCloseRange(backs[i].label)) return backs[i].id;
       }
       for (var j = 0; j < backs.length; j++) {
         if (!/ultra/i.test(backs[j].label || '')) return backs[j].id;
@@ -689,7 +754,7 @@
       el2.textContent =
         (label ? label + ' - ' : '') +
         (w && h ? w + 'x' + h + ' - ' : '') +
-        checks + ' checks';
+        checks + ' checks - build ' + BUILD;
     }, 1000);
   }
 
