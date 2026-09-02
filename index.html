@@ -294,6 +294,29 @@
   .hint:empty { display: none; }
   .hint strong { color: var(--text); }
 
+  /* Instructions for the platforms with no install API. Presented as a panel
+     rather than a paragraph because it is a sequence of taps, and a volunteer
+     reads it once while standing up. */
+  .sheet {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    padding: var(--s4);
+    display: grid;
+    gap: var(--s3);
+  }
+  .sheet__title { margin: 0; font-weight: 650; }
+  .sheet__steps {
+    margin: 0;
+    padding-left: 1.2em;
+    display: grid;
+    gap: var(--s2);
+    font-size: 14px;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+  .sheet__steps strong { color: var(--text); }
+
   /* The way out when a card will not scan. Understated, but never hidden
      behind a menu - it is the fallback a volunteer needs in a hurry. */
   .escape {
@@ -351,6 +374,17 @@
   <p class="diag" id="diag"></p>
   <p class="hint" id="hint"></p>
 
+  <button class="btn hidden" id="install" type="button">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"/><path d="M8 11l4 4 4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+    <span>Add to home screen</span>
+  </button>
+
+  <div class="sheet hidden" id="installhelp">
+    <p class="sheet__title">Add to home screen</p>
+    <ol class="sheet__steps" id="installsteps"></ol>
+    <button class="btn" id="installclose" type="button">Close</button>
+  </div>
+
   <a class="escape" id="manual" href="#">
     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
     Search by name instead
@@ -374,7 +408,7 @@
 
   // Bumped on every publish. Caches on phones are aggressive and a stale page
   // is indistinguishable from a fix that did not work.
-  var BUILD = '2026-09-02d';
+  var BUILD = '2026-09-02e';
   var last = { text: null, at: 0 };
 
   el('manual').href = CHECKIN_URL;
@@ -808,6 +842,122 @@
         start(id);
       }
     };
+  }
+
+  /* ---------------------------------------------------------------------
+     Installing to the home screen.
+
+     Two completely different mechanisms, because the platforms differ:
+
+       Android/Chrome fires beforeinstallprompt, which can be saved and
+       replayed from a tap. That is a real one-tap install, and it only fires
+       at all because sw.js controls this page.
+
+       iOS has no equivalent. NOTHING a web page does can trigger Add to Home
+       Screen; it is Share sheet only, and on iOS that entry exists in Safari
+       alone - Brave, Chrome and Firefox on iOS do not offer it. So the button
+       shows the steps and says which browser they need.
+
+     Either way the button hides once the app is already installed, so it never
+     nags someone who has done it.
+     --------------------------------------------------------------------- */
+
+  var installEvent = null;
+
+  function isStandalone() {
+    return (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ||
+           navigator.standalone === true;
+  }
+
+  function isIos() {
+    return /iphone|ipad|ipod/i.test(navigator.userAgent) ||
+           (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  }
+
+  /**
+   * Whether this is Safari rather than another browser on iOS.
+   *
+   * Every iOS browser renders with WebKit and most identify as Safari, so this
+   * can only rule out the ones that announce themselves. It is used to soften
+   * the wording, never to block anything.
+   */
+  function isThirdPartyIosBrowser() {
+    return /crios|fxios|edgios|opt\/|brave/i.test(navigator.userAgent);
+  }
+
+  function steps() {
+    if (!isIos()) {
+      return ['Open your browser menu.',
+              'Choose <strong>Install app</strong> or <strong>Add to Home screen</strong>.'];
+    }
+    var list = [
+      'Tap the <strong>Share</strong> button - the square with an arrow out of the top.',
+      'Scroll down and tap <strong>Add to Home Screen</strong>.',
+      'Tap <strong>Add</strong>.'
+    ];
+
+    // Named first where the browser admits what it is. Brave on iOS does not -
+    // it reports itself as Safari on purpose - so the closing note has to cover
+    // the case regardless, or someone hunts a Share sheet entry that is not
+    // there and concludes the page is broken.
+    if (isThirdPartyIosBrowser()) {
+      list.unshift('Open this page in <strong>Safari</strong> first. On iPhone, only ' +
+                   'Safari can add a page to the home screen.');
+    } else {
+      list.push('No <strong>Add to Home Screen</strong> in that list? Then this is not ' +
+                'Safari - Brave, Chrome and Firefox on iPhone do not offer it. Open ' +
+                'this page in <strong>Safari</strong> and try again.');
+    }
+    return list;
+  }
+
+  function showInstallButton() {
+    if (isStandalone()) return;
+    el('install').className = 'btn';
+  }
+
+  el('install').onclick = function () {
+    if (installEvent) {
+      installEvent.prompt();
+      installEvent.userChoice.then(function () {
+        installEvent = null;
+        el('install').className = 'btn hidden';
+      });
+      return;
+    }
+    el('installsteps').innerHTML = steps().map(function (t) {
+      return '<li>' + t + '</li>';
+    }).join('');
+    el('installhelp').className = 'sheet';
+    el('install').className = 'btn hidden';
+  };
+
+  el('installclose').onclick = function () {
+    el('installhelp').className = 'sheet hidden';
+    showInstallButton();
+  };
+
+  window.addEventListener('beforeinstallprompt', function (e) {
+    e.preventDefault();
+    installEvent = e;
+    showInstallButton();
+  });
+
+  window.addEventListener('appinstalled', function () {
+    installEvent = null;
+    el('install').className = 'btn hidden';
+    el('installhelp').className = 'sheet hidden';
+  });
+
+  // Android may fire beforeinstallprompt a moment after load; iOS never will,
+  // and there the button is the instructions.
+  if (isIos()) showInstallButton();
+
+  // Registered only to make the app installable. It caches nothing - see sw.js.
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js').catch(function () {
+      // Installability is a convenience; scanning must not depend on it.
+    });
   }
 
   el('start').onclick = function () { start(); };
