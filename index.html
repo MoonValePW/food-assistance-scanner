@@ -392,10 +392,11 @@
    */
   function extractToken(scanned) {
     if (!scanned) return null;
-    var raw = String(scanned).trim();
-    var m = raw.match(/[?&]t=([A-Za-z0-9_\-]{16,})/);
+    var raw = String(scanned).replace(/\s+/g, '');
+    if (!raw) return null;
+    var m = raw.match(/[?&#]t=([A-Za-z0-9_\-]{16,})/i);
     if (m) return m[1];
-    if (/^[A-Za-z0-9_\-]{16,}$/.test(raw)) return raw;
+    if (/^[A-Za-z0-9_\-]{16,}={0,2}$/.test(raw)) return raw.replace(/=+$/, '');
     return null;
   }
 
