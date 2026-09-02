@@ -268,6 +268,22 @@
     color: var(--text);
   }
 
+  /*
+    What the camera is actually doing, in numbers.
+
+    "It shows a picture but nothing happens" has two completely different
+    causes: the decoder is not running at all, or it is running and cannot read
+    the code. They are indistinguishable by eye and need opposite fixes, so the
+    page counts its own decode attempts and says so.
+  */
+  .diag {
+    margin: 0;
+    font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color: var(--muted);
+    text-align: center;
+  }
+  .diag:empty { display: none; }
+
   .hint {
     margin: 0;
     font-size: 13px;
@@ -332,6 +348,7 @@
 
   <select id="cameras" class="hidden" aria-label="Camera"></select>
 
+  <p class="diag" id="diag"></p>
   <p class="hint" id="hint"></p>
 
   <a class="escape" id="manual" href="#">
@@ -353,6 +370,7 @@
   var el = function (id) { return document.getElementById(id); };
   var status = el('status');
   var scanner = null, running = false, busy = false, torchOn = false;
+  var checks = 0, diagTimer = null;
   var last = { text: null, at: 0 };
 
   el('manual').href = CHECKIN_URL;
@@ -528,7 +546,7 @@
        * accept whatever the browser wants to give us.
        */
       function attempt(selectors, i) {
-        return scanner.start(selectors[i].camera, config(selectors[i].camera), onScan, function () {})
+        return scanner.start(selectors[i].camera, config(selectors[i].camera), onScan, onNoCodeThisFrame)
           .catch(function (e) {
             if (i + 1 >= selectors.length) throw e;
             return attempt(selectors, i + 1);
@@ -545,6 +563,8 @@
         el('start').className = 'btn btn--primary hidden';
         say('Point the camera at the family’s card.');
         badge('Scanning', true);
+        checks = 0;
+        startDiagnostics();
         setUpTorch();
         showCameras(devices, id);
         checkPreviewVisible();
@@ -640,6 +660,37 @@
         start(next.id);
       }
     });
+  }
+
+  /**
+   * Called by the library for every frame that contained no readable code.
+   *
+   * Counting these is the difference between "the decoder never started" and
+   * "the decoder is looking and cannot read this card", which is the first
+   * thing worth knowing when someone says nothing happens.
+   */
+  function onNoCodeThisFrame() { checks++; }
+
+  /** Reports the live camera settings and the decode count, once a second. */
+  function startDiagnostics() {
+    if (diagTimer) clearInterval(diagTimer);
+    diagTimer = setInterval(function () {
+      var el2 = el('diag');
+      if (!running) { el2.textContent = ''; return; }
+
+      var label = '', w = 0, h = 0;
+      try {
+        var st = scanner.getRunningTrackSettings() || {};
+        label = String(st.label || st.facingMode || '');
+        w = st.width || 0;
+        h = st.height || 0;
+      } catch (e) { /* not all browsers report it */ }
+
+      el2.textContent =
+        (label ? label + ' - ' : '') +
+        (w && h ? w + 'x' + h + ' - ' : '') +
+        checks + ' checks';
+    }, 1000);
   }
 
   function stop() {
